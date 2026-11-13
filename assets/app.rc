@@ -1,7 +1,7 @@
 1 ICON "icon.ico"
 1 VERSIONINFO
-FILEVERSION 0,1,0,0
-PRODUCTVERSION 0,1,0,0
+FILEVERSION 0,1,1,0
+PRODUCTVERSION 0,1,1,0
 FILEOS 0x40004
 FILETYPE 1
 BEGIN
@@ -11,8 +11,8 @@ BEGIN
     BEGIN
       VALUE "FileDescription", "Time Convert\0"
       VALUE "ProductName", "Time Convert\0"
-      VALUE "FileVersion", "0.1.0\0"
-      VALUE "ProductVersion", "0.1.0\0"
+      VALUE "FileVersion", "0.1.1\0"
+      VALUE "ProductVersion", "0.1.1\0"
       VALUE "LegalCopyright", "Copyright (c) 2026 Boozted Hosting LLC and Kaden Mielitz\0"
     END
   END

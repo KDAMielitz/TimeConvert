@@ -2,7 +2,7 @@
 
 TimeConvert is a local desktop application. It does not collect, store on a server, transmit, or share any personal data, and it contains no analytics, telemetry, advertising, or update checks. It makes no network connections while running.
 
-The only data it writes is a small settings file on your own computer containing your selected time zones and display options (always-on-top and analog clocks):
+The only data it writes is a small settings file on your own computer containing your selected time zones and display options (always-on-top, analog clocks and 12-hour time):
 
 - Windows: `%APPDATA%\TimeConvert\settings.json`
 - Linux: `$XDG_CONFIG_HOME/timeconvert/settings.json`, or `~/.config/timeconvert/settings.json`

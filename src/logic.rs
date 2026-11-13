@@ -1,8 +1,63 @@
-use chrono::{DateTime, Duration, LocalResult, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{
+    DateTime, Duration, LocalResult, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc,
+};
 use chrono_tz::Tz;
 use std::collections::HashMap;
 
+/// Parses a time typed by the user: 24-hour (`19:30`, `1930`, `930`) or
+/// 12-hour with an AM/PM suffix (`7:30 PM`, `730pm`, `12am`).
 pub fn parse_time(input: &str) -> Option<NaiveTime> {
+    let lower = input.to_ascii_lowercase();
+    for (suffix, pm) in [("am", false), ("pm", true)] {
+        if let Some(core) = lower.strip_suffix(suffix) {
+            let core = core.trim_end();
+            // A bare hour such as "7pm" or "12 am" is also fine.
+            let time = if !core.is_empty() && core.len() <= 2 && core.bytes().all(|b| b.is_ascii_digit())
+            {
+                parse_time_24(&format!("{core}:00"))?
+            } else {
+                parse_time_24(core)?
+            };
+            let hour = time.hour12().1;
+            if time.hour() == 0 || time.hour() > 12 {
+                return None;
+            }
+            let hour24 = match (hour, pm) {
+                (12, false) => 0,
+                (12, true) => 12,
+                (h, true) => h + 12,
+                (h, false) => h,
+            };
+            return NaiveTime::from_hms_opt(hour24, time.minute(), 0);
+        }
+    }
+    parse_time_24(input)
+}
+
+/// Parses a time for the 12-hour mode, where AM/PM comes from a separate toggle.
+/// An explicit suffix (`7:30pm`) wins; hours 1-12 follow the toggle; hours 0 and
+/// 13-23 are unambiguous 24-hour times and are taken as typed.
+pub fn parse_time_12(input: &str, pm: bool) -> Option<NaiveTime> {
+    let time = parse_time(input)?;
+    let lower = input.to_ascii_lowercase();
+    if lower.ends_with("am") || lower.ends_with("pm") {
+        return Some(time);
+    }
+    let hour = time.hour();
+    if (1..=12).contains(&hour) {
+        let hour24 = match (hour, pm) {
+            (12, false) => 0,
+            (12, true) => 12,
+            (h, true) => h + 12,
+            (h, false) => h,
+        };
+        NaiveTime::from_hms_opt(hour24, time.minute(), 0)
+    } else {
+        Some(time)
+    }
+}
+
+fn parse_time_24(input: &str) -> Option<NaiveTime> {
     let bytes = input.as_bytes();
     let (hours, minutes) = match bytes {
         [_, m1, m2] if bytes.iter().all(u8::is_ascii_digit) => (&bytes[..1], [*m1, *m2]),
@@ -62,6 +117,8 @@ pub struct Zone {
     pub tz: Tz,
     pub label: String,
     pub search: String,
+    /// Space-separated lowercase abbreviations such as "cdt cst".
+    pub abbrs: String,
 }
 pub fn zones() -> Vec<Zone> {
     let countries: HashMap<&str, &str> = include_str!("../iso3166.tab")
@@ -94,20 +151,117 @@ pub fn zones() -> Vec<Zone> {
                         "TR" => "turkey turkiye",
                         _ => "",
                     };
+                    let abbrs = abbreviations_for(fields[2]).to_string();
                     let search =
-                        format!("{} {} {} {}", label, fields[2], code, aliases).to_lowercase();
-                    result.push(Zone { tz, label, search });
+                        format!("{} {} {} {} {}", label, fields[2], code, aliases, abbrs)
+                            .to_lowercase();
+                    result.push(Zone {
+                        tz,
+                        label,
+                        search,
+                        abbrs,
+                    });
                 }
             }
         }
     }
+    result.push(Zone {
+        tz: Tz::UTC,
+        label: "UTC - Coordinated Universal Time".to_string(),
+        search: "utc - coordinated universal time z zulu".to_string(),
+        abbrs: "utc z".to_string(),
+    });
     result.sort_by(|a, b| a.label.cmp(&b.label));
     result
 }
+/// Common time-zone abbreviations. Abbreviations are ambiguous worldwide
+/// (e.g. CST, IST), so each maps to the IANA zones it is commonly used for;
+/// the zone's own rules still decide DST.
+const ABBREVIATIONS: &[(&str, &str)] = &[
+    ("America/New_York", "est edt et"),
+    ("America/Toronto", "est edt et"),
+    ("America/Chicago", "cst cdt ct"),
+    ("America/Mexico_City", "cst"),
+    ("America/Denver", "mst mdt mt"),
+    ("America/Phoenix", "mst"),
+    ("America/Los_Angeles", "pst pdt pt"),
+    ("America/Vancouver", "pst pdt pt"),
+    ("America/Anchorage", "akst akdt"),
+    ("Pacific/Honolulu", "hst"),
+    ("America/Halifax", "ast adt"),
+    ("America/St_Johns", "nst ndt"),
+    ("America/Sao_Paulo", "brt"),
+    ("America/Argentina/Buenos_Aires", "art"),
+    ("Europe/London", "gmt bst"),
+    ("Europe/Dublin", "gmt ist"),
+    ("Europe/Lisbon", "wet west"),
+    ("Europe/Berlin", "cet cest"),
+    ("Europe/Paris", "cet cest"),
+    ("Europe/Madrid", "cet cest"),
+    ("Europe/Rome", "cet cest"),
+    ("Europe/Amsterdam", "cet cest"),
+    ("Europe/Brussels", "cet cest"),
+    ("Europe/Vienna", "cet cest"),
+    ("Europe/Zurich", "cet cest"),
+    ("Europe/Stockholm", "cet cest"),
+    ("Europe/Oslo", "cet cest"),
+    ("Europe/Copenhagen", "cet cest"),
+    ("Europe/Warsaw", "cet cest"),
+    ("Europe/Prague", "cet cest"),
+    ("Europe/Budapest", "cet cest"),
+    ("Europe/Athens", "eet eest"),
+    ("Europe/Helsinki", "eet eest"),
+    ("Europe/Kyiv", "eet eest"),
+    ("Europe/Bucharest", "eet eest"),
+    ("Africa/Cairo", "eet"),
+    ("Europe/Moscow", "msk"),
+    ("Europe/Istanbul", "trt"),
+    ("Africa/Johannesburg", "sast"),
+    ("Africa/Lagos", "wat"),
+    ("Africa/Nairobi", "eat"),
+    ("Asia/Jerusalem", "ist idt"),
+    ("Asia/Dubai", "gst"),
+    ("Asia/Karachi", "pkt"),
+    ("Asia/Kolkata", "ist"),
+    ("Asia/Shanghai", "cst"),
+    ("Asia/Hong_Kong", "hkt"),
+    ("Asia/Singapore", "sgt"),
+    ("Asia/Tokyo", "jst"),
+    ("Asia/Seoul", "kst"),
+    ("Australia/Sydney", "aest aedt"),
+    ("Australia/Melbourne", "aest aedt"),
+    ("Australia/Brisbane", "aest"),
+    ("Australia/Adelaide", "acst acdt"),
+    ("Australia/Darwin", "acst"),
+    ("Australia/Perth", "awst"),
+    ("Pacific/Auckland", "nzst nzdt"),
+];
+
+fn abbreviations_for(name: &str) -> &'static str {
+    ABBREVIATIONS
+        .iter()
+        .find(|(tz, _)| *tz == name)
+        .map_or("", |(_, abbr)| abbr)
+}
+
 pub fn matches(zone: &Zone, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    // A query that is exactly an abbreviation (e.g. "cdt") matches only the
+    // zones that use it, instead of every label containing those letters.
+    if !query.is_empty() && !query.contains(char::is_whitespace) && is_abbreviation(&query) {
+        return zone.abbrs.split(' ').any(|a| a == query);
+    }
     query
         .split_whitespace()
         .all(|word| zone.search.contains(word))
+}
+
+fn is_abbreviation(word: &str) -> bool {
+    word == "utc"
+        || word == "z"
+        || ABBREVIATIONS
+            .iter()
+            .any(|(_, abbr)| abbr.split(' ').any(|a| a == word))
 }
 pub fn row_label(mut row: usize) -> String {
     let mut result = String::new();
@@ -157,6 +311,53 @@ mod tests {
             assert_eq!(parse_time(input), None, "{input}");
         }
     }
+    #[test]
+    fn twelve_hour_toggle_input() {
+        let t = |h, m| NaiveTime::from_hms_opt(h, m, 0);
+        assert_eq!(parse_time_12("12:45", false), t(0, 45));
+        assert_eq!(parse_time_12("12:45", true), t(12, 45));
+        assert_eq!(parse_time_12("7:30", false), t(7, 30));
+        assert_eq!(parse_time_12("7:30", true), t(19, 30));
+        assert_eq!(parse_time_12("730", true), t(19, 30));
+        assert_eq!(parse_time_12("1:05", true), t(13, 5));
+        // Explicit suffix beats the toggle.
+        assert_eq!(parse_time_12("7:30 am", true), t(7, 30));
+        assert_eq!(parse_time_12("7:30 PM", false), t(19, 30));
+        // Unambiguous 24-hour input is taken as typed.
+        assert_eq!(parse_time_12("1930", false), t(19, 30));
+        assert_eq!(parse_time_12("0:15", true), t(0, 15));
+        assert_eq!(parse_time_12("00:15", true), t(0, 15));
+        assert_eq!(parse_time_12("13:00", false), t(13, 0));
+        assert_eq!(parse_time_12("25:00", true), None);
+        assert_eq!(parse_time_12("7:75", true), None);
+        assert_eq!(parse_time_12("", false), None);
+    }
+    #[test]
+    fn twelve_hour_input() {
+        for (input, hour, minute) in [
+            ("7:30 PM", 19, 30),
+            ("7:30pm", 19, 30),
+            ("730pm", 19, 30),
+            ("0730 PM", 19, 30),
+            ("7:30 am", 7, 30),
+            ("12:00 AM", 0, 0),
+            ("12am", 0, 0),
+            ("12:15 PM", 12, 15),
+            ("12pm", 12, 0),
+            ("7pm", 19, 0),
+            ("11:59 PM", 23, 59),
+            ("1:05 AM", 1, 5),
+        ] {
+            assert_eq!(
+                parse_time(input),
+                NaiveTime::from_hms_opt(hour, minute, 0),
+                "{input}"
+            );
+        }
+        for input in ["0:30 am", "13:00 pm", "13pm", "7:60 pm", "pm", " 7pm", "7:3x pm", "99pm"] {
+            assert_eq!(parse_time(input), None, "{input}");
+        }
+    }
     fn date(y: i32, m: u32, d: u32, h: u32, min: u32) -> NaiveDateTime {
         NaiveDate::from_ymd_opt(y, m, d)
             .unwrap()
@@ -194,6 +395,25 @@ mod tests {
         assert!(z
             .iter()
             .any(|x| x.tz == chrono_tz::Europe::Berlin && matches(x, "germany")));
+    }
+    #[test]
+    fn abbreviation_search() {
+        let z = zones();
+        for (q, tz) in [
+            ("UTC", chrono_tz::UTC),
+            ("cdt", chrono_tz::America::Chicago),
+            ("CST", chrono_tz::America::Chicago),
+            ("cst", chrono_tz::Asia::Shanghai),
+            ("AEST", chrono_tz::Australia::Sydney),
+            ("pst", chrono_tz::America::Los_Angeles),
+            ("cest", chrono_tz::Europe::Berlin),
+        ] {
+            assert!(z.iter().any(|x| x.tz == tz && matches(x, q)), "{q}");
+        }
+        // An exact abbreviation is not diluted by substring hits.
+        assert!(!z
+            .iter()
+            .any(|x| x.tz == chrono_tz::Europe::Oslo && matches(x, "est")));
     }
     #[test]
     fn search_tokens() {

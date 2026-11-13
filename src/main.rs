@@ -43,6 +43,7 @@ struct Settings {
     zones: Vec<String>,
     on_top: bool,
     analog: bool,
+    time_12h: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -50,6 +51,7 @@ impl Default for Settings {
             zones: vec!["America/Chicago".into(), "Asia/Tokyo".into()],
             on_top: false,
             analog: false,
+            time_12h: false,
         }
     }
 }
@@ -129,6 +131,13 @@ struct App {
     rows: Vec<Row>,
     instant: DateTime<Utc>,
     reference: usize,
+    /// Row whose timezone picker is open, if any.
+    open_picker: Option<usize>,
+    /// Bumped every time a picker opens so its popup never reuses a stale size.
+    picker_gen: u64,
+    settings_open: bool,
+    /// AM/PM choice for row A's time field in 12-hour mode.
+    pm: bool,
 }
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -158,6 +167,10 @@ impl App {
             rows,
             instant: Utc::now(),
             reference: 0,
+            open_picker: None,
+            picker_gen: 0,
+            settings_open: false,
+            pm: false,
         };
         a.refresh();
         a
@@ -165,10 +178,23 @@ impl App {
     fn tz(&self, i: usize) -> Tz {
         self.rows[i].tz
     }
+    fn time_text(&self, t: &DateTime<Tz>) -> String {
+        if self.settings.time_12h {
+            t.format("%-I:%M %p").to_string()
+        } else {
+            t.format("%H:%M").to_string()
+        }
+    }
     fn refresh_row(&mut self, i: usize) {
         let t = self.instant.with_timezone(&self.tz(i));
         self.rows[i].date = t.format("%Y-%m-%d").to_string();
-        self.rows[i].time = t.format("%H:%M").to_string();
+        self.rows[i].time = if i == 0 && self.settings.time_12h {
+            // Row A is the input: plain "12:45", with AM/PM in its own dropdown.
+            self.pm = t.hour() >= 12;
+            t.format("%-I:%M").to_string()
+        } else {
+            self.time_text(&t)
+        };
         self.rows[i].message.clear();
     }
     fn refresh(&mut self) {
@@ -177,9 +203,14 @@ impl App {
         }
     }
     fn convert(&mut self, i: usize) {
+        let time = if self.settings.time_12h {
+            logic::parse_time_12(&self.rows[i].time, self.pm)
+        } else {
+            logic::parse_time(&self.rows[i].time)
+        };
         let parsed = NaiveDate::parse_from_str(&self.rows[i].date, "%Y-%m-%d")
             .ok()
-            .zip(logic::parse_time(&self.rows[i].time));
+            .zip(time);
         if let Some((date, time)) = parsed {
             if let Some(res) = logic::resolve(self.tz(i), NaiveDateTime::new(date, time)) {
                 self.instant = res.instant;
@@ -197,26 +228,66 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("Time Convert");
-                if ui
-                    .checkbox(&mut self.settings.on_top, "Always on top")
-                    .changed()
-                {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
-                        if self.settings.on_top {
-                            egui::WindowLevel::AlwaysOnTop
-                        } else {
-                            egui::WindowLevel::Normal
-                        },
-                    ));
-                    save(&self.settings);
-                }
                 if ui.button("Swap A/B").clicked() {
                     self.settings.zones.swap(0, 1);
                     self.rows.swap(0, 1);
                     if self.reference < 2 {
                         self.reference = 1 - self.reference;
                     }
+                    // Re-render row texts so row A's field matches its new zone.
+                    self.refresh();
                     save(&self.settings);
+                }
+                let settings_button = ui.button("Settings");
+                if settings_button.clicked() {
+                    self.settings_open = !self.settings_open;
+                }
+                if self.settings_open {
+                    let area = egui::Area::new(egui::Id::new("settings_popup"))
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(settings_button.rect.left_bottom() + egui::vec2(0.0, 4.0))
+                        .show(ctx, |ui| {
+                            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                ui.set_min_width(200.0);
+                                let mut changed = false;
+                                if ui
+                                    .checkbox(&mut self.settings.on_top, "Always on top")
+                                    .changed()
+                                {
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                                        if self.settings.on_top {
+                                            egui::WindowLevel::AlwaysOnTop
+                                        } else {
+                                            egui::WindowLevel::Normal
+                                        },
+                                    ));
+                                    changed = true;
+                                }
+                                if ui
+                                    .checkbox(&mut self.settings.analog, "Analog clocks")
+                                    .changed()
+                                {
+                                    changed = true;
+                                }
+                                if ui
+                                    .checkbox(&mut self.settings.time_12h, "12-hour time (AM/PM)")
+                                    .changed()
+                                {
+                                    self.refresh();
+                                    changed = true;
+                                }
+                                if changed {
+                                    save(&self.settings);
+                                }
+                            });
+                        });
+                    let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+                    if escape
+                        || (settings_button.clicked_elsewhere()
+                            && area.response.clicked_elsewhere())
+                    {
+                        self.settings_open = false;
+                    }
                 }
             });
             egui::ScrollArea::vertical()
@@ -260,70 +331,187 @@ impl eframe::App for App {
                                         egui::Color32::WHITE,
                                     );
                                     let selected = self.settings.zones[i].clone();
-                                    let popup = egui::ComboBox::from_id_salt(i)
-                                        .selected_text(&selected)
-                                        .width(
-                                            (ui.available_width()
-                                                - if i >= 2 {
-                                                    80.0
-                                                } else if i == 0 {
-                                                    62.0
-                                                } else {
-                                                    8.0
-                                                })
-                                            .clamp(120.0, 310.0),
-                                        )
-                                        .close_behavior(
-                                            egui::PopupCloseBehavior::CloseOnClickOutside,
-                                        )
-                                        .show_ui(ui, |ui| {
-                                            let search = ui.add(
-                                                egui::TextEdit::singleline(&mut self.rows[i].query)
-                                                    .hint_text(
-                                                        "Search country, city, or IANA zone",
-                                                    ),
-                                            );
-                                            if !self.rows[i].popup_open {
-                                                search.request_focus();
-                                            }
-                                            self.rows[i].popup_open = true;
-                                            let query = self.rows[i].query.to_lowercase();
-                                            egui::ScrollArea::vertical().max_height(200.0).show(
-                                                ui,
-                                                |ui| {
-                                                    for z in self
-                                                        .zones
-                                                        .iter()
-                                                        .filter(|z| logic::matches(z, &query))
-                                                    {
-                                                        let offset = self
-                                                            .instant
-                                                            .with_timezone(&z.tz)
-                                                            .format("%:z");
-                                                        if ui
-                                                            .selectable_label(
-                                                                selected == z.tz.name(),
-                                                                format!(
-                                                                    "{} (UTC{})",
-                                                                    z.label, offset
-                                                                ),
-                                                            )
-                                                            .clicked()
+                                    let combo_width = (ui.available_width()
+                                        - if i >= 2 {
+                                            80.0
+                                        } else if i == 0 {
+                                            62.0
+                                        } else {
+                                            8.0
+                                        })
+                                    .clamp(120.0, 310.0);
+                                    let (button_rect, button) = ui.allocate_exact_size(
+                                        egui::vec2(combo_width, 28.0),
+                                        egui::Sense::click(),
+                                    );
+                                    let is_open = self.open_picker == Some(i);
+                                    let fill = if is_open || button.hovered() {
+                                        egui::Color32::from_rgb(48, 78, 90)
+                                    } else {
+                                        egui::Color32::from_rgb(37, 57, 72)
+                                    };
+                                    ui.painter().rect_filled(
+                                        button_rect,
+                                        egui::CornerRadius::same(6),
+                                        fill,
+                                    );
+                                    let text_area = egui::Rect::from_min_max(
+                                        button_rect.min + egui::vec2(10.0, 0.0),
+                                        egui::pos2(button_rect.right() - 26.0, button_rect.bottom()),
+                                    );
+                                    let galley = ui.painter().layout_no_wrap(
+                                        selected.clone(),
+                                        egui::FontId::proportional(14.0),
+                                        egui::Color32::WHITE,
+                                    );
+                                    let text_pos = egui::pos2(
+                                        text_area.left(),
+                                        button_rect.center().y - galley.size().y / 2.0,
+                                    );
+                                    ui.painter().with_clip_rect(text_area).galley(
+                                        text_pos,
+                                        galley,
+                                        egui::Color32::WHITE,
+                                    );
+                                    let arrow = egui::pos2(
+                                        button_rect.right() - 13.0,
+                                        button_rect.center().y,
+                                    );
+                                    ui.painter().add(egui::Shape::convex_polygon(
+                                        vec![
+                                            arrow + egui::vec2(-4.5, -2.5),
+                                            arrow + egui::vec2(4.5, -2.5),
+                                            arrow + egui::vec2(0.0, 3.0),
+                                        ],
+                                        MUTED,
+                                        egui::Stroke::NONE,
+                                    ));
+                                    if button.clicked() {
+                                        if is_open {
+                                            self.open_picker = None;
+                                        } else {
+                                            // A fresh generation gives the popup a fresh id, so
+                                            // egui never reuses a size remembered from an earlier
+                                            // (differently filtered) list.
+                                            self.picker_gen += 1;
+                                            self.open_picker = Some(i);
+                                            self.rows[i].query.clear();
+                                            self.rows[i].popup_open = false;
+                                        }
+                                    }
+                                    if self.open_picker == Some(i) {
+                                        let popup_width = button_rect.width().max(300.0);
+                                        let mut chosen: Option<Tz> = None;
+                                        // The popup has a FIXED height so it never resizes (and
+                                        // never gets re-pushed around by egui's keep-inside-the-
+                                        // window logic) while the list is filtered. It opens
+                                        // downward when there is room, otherwise upward.
+                                        let screen = ui.ctx().screen_rect();
+                                        let below = screen.bottom() - button_rect.bottom() - 8.0;
+                                        let above = button_rect.top() - screen.top() - 8.0;
+                                        let chrome = 28.0 + 26.0; // search box + frame padding
+                                        let open_down = below >= 190.0 + chrome || below >= above;
+                                        let room = if open_down { below } else { above };
+                                        let list_height = (room - chrome).clamp(70.0, 190.0);
+                                        let popup_area = egui::Area::new(egui::Id::new((
+                                            "tz_popup",
+                                            i,
+                                            self.picker_gen,
+                                        )))
+                                        .order(egui::Order::Foreground);
+                                        let popup_area = if open_down {
+                                            popup_area.fixed_pos(
+                                                button_rect.left_bottom() + egui::vec2(0.0, 4.0),
+                                            )
+                                        } else {
+                                            popup_area
+                                                .pivot(egui::Align2::LEFT_BOTTOM)
+                                                .fixed_pos(
+                                                    button_rect.left_top() - egui::vec2(0.0, 4.0),
+                                                )
+                                        };
+                                        let area = popup_area.show(ui.ctx(), |ui| {
+                                            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                                ui.set_width(popup_width);
+                                                ui.style_mut().wrap_mode =
+                                                    Some(egui::TextWrapMode::Truncate);
+                                                let search = ui.add(
+                                                    egui::TextEdit::singleline(
+                                                        &mut self.rows[i].query,
+                                                    )
+                                                    .hint_text("Search country, city, or IANA zone")
+                                                    .desired_width(f32::INFINITY),
+                                                );
+                                                if !self.rows[i].popup_open {
+                                                    search.request_focus();
+                                                    self.rows[i].popup_open = true;
+                                                }
+                                                let query = self.rows[i].query.to_lowercase();
+                                                let mut first: Option<Tz> = None;
+                                                let mut list = egui::ScrollArea::vertical()
+                                                    .id_salt(("tz_list", i, self.picker_gen))
+                                                    .min_scrolled_height(list_height)
+                                                    .max_height(list_height)
+                                                    .auto_shrink([false, false]);
+                                                if search.changed() {
+                                                    // New filter: start from the top of the list.
+                                                    list = list.vertical_scroll_offset(0.0);
+                                                }
+                                                list.show(ui, |ui| {
+                                                        for z in self
+                                                            .zones
+                                                            .iter()
+                                                            .filter(|z| logic::matches(z, &query))
                                                         {
-                                                            self.settings.zones[i] =
-                                                                z.tz.name().into();
-                                                            self.rows[i].tz = z.tz;
-                                                            self.rows[i].query.clear();
-                                                            self.rows[i].popup_open = false;
-                                                            ui.memory_mut(|m| m.close_popup());
-                                                            break;
+                                                            first.get_or_insert(z.tz);
+                                                            let offset = self
+                                                                .instant
+                                                                .with_timezone(&z.tz)
+                                                                .format("%:z");
+                                                            if ui
+                                                                .selectable_label(
+                                                                    selected == z.tz.name(),
+                                                                    format!(
+                                                                        "{} (UTC{})",
+                                                                        z.label, offset
+                                                                    ),
+                                                                )
+                                                                .clicked()
+                                                            {
+                                                                chosen = Some(z.tz);
+                                                            }
                                                         }
-                                                    }
-                                                },
-                                            );
+                                                        if first.is_none() {
+                                                            ui.label(
+                                                                egui::RichText::new("No matches")
+                                                                    .color(MUTED),
+                                                            );
+                                                        }
+                                                    });
+                                                if search.lost_focus()
+                                                    && ui.input(|inp| {
+                                                        inp.key_pressed(egui::Key::Enter)
+                                                    })
+                                                {
+                                                    chosen = chosen.or(first);
+                                                }
+                                            });
                                         });
-                                    if popup.inner.is_none() {
-                                        self.rows[i].popup_open = false;
+                                        let escape =
+                                            ui.input(|inp| inp.key_pressed(egui::Key::Escape));
+                                        if let Some(tz) = chosen {
+                                            self.settings.zones[i] = tz.name().into();
+                                            self.rows[i].tz = tz;
+                                            self.rows[i].query.clear();
+                                            self.rows[i].popup_open = false;
+                                            self.open_picker = None;
+                                        } else if escape
+                                            || (button.clicked_elsewhere()
+                                                && area.response.clicked_elsewhere())
+                                        {
+                                            self.rows[i].popup_open = false;
+                                            self.open_picker = None;
+                                        }
                                     }
                                     if selected != self.settings.zones[i] {
                                         self.refresh_row(i);
@@ -354,9 +542,22 @@ impl eframe::App for App {
                                         let time = ui.add_sized(
                                             [55.0, 20.0],
                                             egui::TextEdit::singleline(&mut self.rows[i].time)
-                                                .hint_text("HH:MM")
+                                                .hint_text(if self.settings.time_12h {
+                                                    "h:mm"
+                                                } else {
+                                                    "HH:MM"
+                                                })
                                                 .interactive(i == 0),
                                         );
+                                        if self.settings.time_12h {
+                                            egui::ComboBox::from_id_salt("meridiem")
+                                                .selected_text(if self.pm { "PM" } else { "AM" })
+                                                .width(34.0)
+                                                .show_ui(ui, |ui| {
+                                                    ui.selectable_value(&mut self.pm, false, "AM");
+                                                    ui.selectable_value(&mut self.pm, true, "PM");
+                                                });
+                                        }
                                         if date.changed() || time.changed() {
                                             self.rows[i].message.clear();
                                         }
@@ -470,12 +671,6 @@ impl eframe::App for App {
                         save(&self.settings);
                     }
                     ui.separator();
-                    if ui
-                        .checkbox(&mut self.settings.analog, "Analog clocks")
-                        .changed()
-                    {
-                        save(&self.settings);
-                    }
                     if ui.button("+ Add zone").clicked() {
                         self.settings.zones.push("Etc/UTC".into());
                         self.rows.push(Row::default());
@@ -552,11 +747,20 @@ mod tests {
             zones: vec![],
             on_top: false,
             analog: false,
+            time_12h: false,
         };
         s.normalize();
         assert_eq!(s.zones.len(), 2);
         s.zones = vec!["UTC".into(); 9];
         s.normalize();
         assert_eq!(s.zones.len(), 9);
+    }
+    #[test]
+    fn old_settings_default_to_24_hour() {
+        let s: Settings = serde_json::from_str(r#"{"zones":["UTC","Asia/Tokyo"],"analog":true}"#)
+            .unwrap();
+        assert!(!s.time_12h);
+        let s: Settings = serde_json::from_str(r#"{"time_12h":true}"#).unwrap();
+        assert!(s.time_12h);
     }
 }

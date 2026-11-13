@@ -10,4 +10,4 @@ Tags use `vMAJOR.MILESTONE.PRODUCTION.TESTING`:
 
 Cargo uses the three-part version `MAJOR.MILESTONE.PRODUCTION`; update it and `Cargo.lock` when that version changes. To release, commit the version change, create the four-part tag, and push that tag. Production tags automatically publish a GitHub Release; ordinary pushes do not.
 
-The Windows executable version resource currently reports the fixed package version `0.1.0.0`; update `assets/app.rc` when the package version changes. Testing tag letters are not embedded in the executable.
+The Windows executable version resource currently reports the fixed package version `0.1.1.0`; update `assets/app.rc` when the package version changes. Testing tag letters are not embedded in the executable.

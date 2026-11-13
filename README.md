@@ -2,7 +2,7 @@
 
 TimeConvert is a compact, open-source Windows and Linux desktop app for comparing times across two or more time zones. Row A is the input: use its Enter button or press Enter in its date or time field to convert, or use Now to use the current time. All other rows display the converted results. Add or remove zones, swap A and B, optionally keep the window on top, and show analog clocks for the selected time.
 
-The timezone picker searches by country, city, or IANA zone ID. Conversions account for daylight saving time and show a note for ambiguous or nonexistent local times. Enter 24-hour times with a colon (`09:30`) or without one (`930` or `1930`).
+The timezone picker searches by country, city, or IANA zone ID. Conversions account for daylight saving time and show a note for ambiguous or nonexistent local times. Enter 24-hour times with a colon (`09:30`) or without one (`930` or `1930`), or switch to 12-hour time with an AM/PM dropdown in Settings. You can also search the timezone picker by common abbreviations such as `UTC`, `CDT`, `PST`, or `AEST`.
 
 ## Download
 
