@@ -13,6 +13,7 @@ BEGIN
       VALUE "ProductName", "Time Convert\0"
       VALUE "FileVersion", "0.1.0\0"
       VALUE "ProductVersion", "0.1.0\0"
+      VALUE "LegalCopyright", "Copyright (c) 2026 KDAMielitz\0"
     END
   END
   BLOCK "VarFileInfo"

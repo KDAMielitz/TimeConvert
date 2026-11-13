@@ -60,8 +60,38 @@ impl Settings {
         }
     }
 }
+fn settings_path_for(
+    os: &str,
+    appdata: Option<PathBuf>,
+    xdg: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let dir = match os {
+        "windows" => appdata?.join("TimeConvert"),
+        "macos" => home?
+            .join("Library")
+            .join("Application Support")
+            .join("TimeConvert"),
+        _ => xdg
+            .filter(|p| p.is_absolute())
+            .or_else(|| home.map(|p| p.join(".config")))?
+            .join("timeconvert"),
+    };
+    Some(dir.join("settings.json"))
+}
 fn settings_path() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("TimeConvert").join("settings.json"))
+    settings_path_for(
+        std::env::consts::OS,
+        std::env::var_os("APPDATA")
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from),
+        std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from),
+        std::env::var_os("HOME")
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from),
+    )
 }
 fn save(s: &Settings) {
     if let Some(path) = settings_path() {
@@ -480,6 +510,28 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn settings_paths() {
+        let home = std::env::temp_dir().join("home");
+        let xdg = std::env::temp_dir().join("config");
+        assert_eq!(
+            settings_path_for("linux", None, Some(xdg.clone()), Some(home.clone())),
+            Some(xdg.join("timeconvert/settings.json"))
+        );
+        assert_eq!(
+            settings_path_for(
+                "linux",
+                None,
+                Some(PathBuf::from("relative")),
+                Some(home.clone())
+            ),
+            Some(home.join(".config/timeconvert/settings.json"))
+        );
+        assert_eq!(
+            settings_path_for("windows", Some(home.clone()), None, None),
+            Some(home.join("TimeConvert/settings.json"))
+        );
+    }
     #[test]
     fn settings_defaults_missing_fields() {
         let s: Settings = serde_json::from_str(r#"{"on_top":true}"#).unwrap();

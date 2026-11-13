@@ -2,6 +2,10 @@
 name = "timeconvert"
 version = "0.1.0"
 edition = "2021"
+description = "A compact cross-platform time zone converter"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/KDAMielitz/TimeConvert"
+readme = "README.md"
 
 [dependencies]
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }

@@ -1,0 +1,105 @@
+name: Release
+on:
+  push:
+    tags: ['v*.*.*.*']
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      kind: ${{ steps.tag.outputs.kind }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s .github/scripts
+      - id: tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python .github/scripts/parse_tag.py "$RELEASE_TAG"
+  build:
+    needs: validate
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x64
+          - os: ubuntu-latest
+            platform: linux-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev libx11-dev libxi-dev libxcursor-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - run: rustup default stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - run: cargo build --release --locked
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $archive = "TimeConvert-$env:RELEASE_TAG-windows-x64.zip"
+          Compress-Archive -LiteralPath target/release/timeconvert.exe, LICENSE-MIT, LICENSE-APACHE, README.md -DestinationPath $archive
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          mkdir package
+          cp target/release/timeconvert LICENSE-MIT LICENSE-APACHE README.md packaging/linux/timeconvert.desktop package/
+          cp assets/icon.png package/timeconvert.png
+          tar -czf "TimeConvert-${RELEASE_TAG}-linux-x86_64.tar.gz" -C package .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: timeconvert-${{ matrix.platform }}
+          path: TimeConvert-*
+          if-no-files-found: error
+          retention-days: 14
+  checksums:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: timeconvert-*
+          path: dist
+          merge-multiple: true
+      - name: Create checksums
+        working-directory: dist
+        run: sha256sum TimeConvert-*.zip TimeConvert-*.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: timeconvert-checksums
+          path: dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+  publish:
+    needs: [validate, checksums]
+    if: needs.validate.outputs.kind == 'production'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: timeconvert-*
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" TimeConvert-*.zip TimeConvert-*.tar.gz SHA256SUMS --generate-notes

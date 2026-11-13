@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Time Convert
+Comment=Compare times in multiple time zones
+Exec=timeconvert
+Icon=timeconvert
+Terminal=false
+Categories=Utility;Clock;
