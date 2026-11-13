@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "A compact cross-platform time zone converter"
 license = "MIT OR Apache-2.0"
+authors = ["Kaden Mielitz", "Boozted Hosting LLC"]
 repository = "https://github.com/KDAMielitz/TimeConvert"
 readme = "README.md"
 

@@ -43,4 +43,6 @@ See [versioning details](docs/VERSIONING.md), including the Windows executable v
 
 ## License
 
+Copyright (c) 2026 Boozted Hosting LLC and Kaden Mielitz.
+
 Licensed under either the [MIT License](LICENSE-MIT) or the [Apache License, Version 2.0](LICENSE-APACHE), at your option. Unless stated otherwise, contributions are dual-licensed under the same terms.
