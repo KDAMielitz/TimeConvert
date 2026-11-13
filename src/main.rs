@@ -1,28 +1,60 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod logic;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Timelike, Utc};
 use chrono_tz::Tz;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, str::FromStr};
+
+const BACKGROUND: egui::Color32 = egui::Color32::from_rgb(13, 24, 36);
+const CARD: egui::Color32 = egui::Color32::from_rgb(22, 38, 53);
+const ACCENT: egui::Color32 = egui::Color32::from_rgb(58, 210, 194);
+const MUTED: egui::Color32 = egui::Color32::from_rgb(159, 181, 194);
+
+fn configure_style(ctx: &egui::Context) {
+    let mut style = (*ctx.style()).clone();
+    style.spacing.item_spacing = egui::vec2(8.0, 7.0);
+    style.spacing.button_padding = egui::vec2(9.0, 5.0);
+    style.visuals = egui::Visuals::dark();
+    style.visuals.panel_fill = BACKGROUND;
+    style.visuals.window_fill = CARD;
+    style.visuals.extreme_bg_color = egui::Color32::from_rgb(12, 27, 39);
+    style.visuals.widgets.noninteractive.bg_fill = CARD;
+    style.visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(37, 57, 72);
+    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(48, 78, 90);
+    style.visuals.widgets.active.bg_fill = egui::Color32::from_rgb(37, 115, 116);
+    style.visuals.selection.bg_fill = egui::Color32::from_rgb(27, 111, 111);
+    style.visuals.window_corner_radius = egui::CornerRadius::same(10);
+    for widget in [
+        &mut style.visuals.widgets.noninteractive,
+        &mut style.visuals.widgets.inactive,
+        &mut style.visuals.widgets.hovered,
+        &mut style.visuals.widgets.active,
+        &mut style.visuals.widgets.open,
+    ] {
+        widget.corner_radius = egui::CornerRadius::same(6);
+    }
+    ctx.set_style(style);
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 struct Settings {
     zones: Vec<String>,
     on_top: bool,
+    analog: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
             zones: vec!["America/Chicago".into(), "Asia/Tokyo".into()],
             on_top: false,
+            analog: false,
         }
     }
 }
 impl Settings {
     fn normalize(&mut self) {
-        self.zones.truncate(6);
         while self.zones.len() < 2 {
             self.zones.push("Asia/Tokyo".into());
         }
@@ -41,13 +73,25 @@ fn save(s: &Settings) {
         }
     }
 }
-#[derive(Default)]
 struct Row {
+    tz: Tz,
     query: String,
     popup_open: bool,
     date: String,
     time: String,
     message: String,
+}
+impl Default for Row {
+    fn default() -> Self {
+        Self {
+            tz: chrono_tz::UTC,
+            query: String::new(),
+            popup_open: false,
+            date: String::new(),
+            time: String::new(),
+            message: String::new(),
+        }
+    }
 }
 struct App {
     settings: Settings,
@@ -58,6 +102,7 @@ struct App {
 }
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        configure_style(&cc.egui_ctx);
         let mut settings: Settings = settings_path()
             .and_then(|p| std::fs::read(p).ok())
             .and_then(|b| serde_json::from_slice(&b).ok())
@@ -69,7 +114,14 @@ impl App {
             } else {
                 egui::WindowLevel::Normal
             }));
-        let rows = (0..settings.zones.len()).map(|_| Row::default()).collect();
+        let rows = settings
+            .zones
+            .iter()
+            .map(|zone| Row {
+                tz: Tz::from_str(zone).unwrap_or(chrono_tz::UTC),
+                ..Default::default()
+            })
+            .collect();
         let mut a = Self {
             settings,
             zones: logic::zones(),
@@ -81,7 +133,7 @@ impl App {
         a
     }
     fn tz(&self, i: usize) -> Tz {
-        Tz::from_str(&self.settings.zones[i]).unwrap_or(chrono_tz::UTC)
+        self.rows[i].tz
     }
     fn refresh_row(&mut self, i: usize) {
         let t = self.instant.with_timezone(&self.tz(i));
@@ -142,106 +194,240 @@ impl eframe::App for App {
                 .show(ui, |ui| {
                     let mut remove = None;
                     for i in 0..self.rows.len() {
-                        ui.separator();
-                        ui.horizontal(|ui| {
-                            ui.strong(((b'A' + i as u8) as char).to_string());
-                            let selected = self.settings.zones[i].clone();
-                            let popup = egui::ComboBox::from_id_salt(i)
-                                .selected_text(&selected)
-                                .width(255.0)
-                                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                                .show_ui(ui, |ui| {
-                                    let search = ui.add(
-                                        egui::TextEdit::singleline(&mut self.rows[i].query)
-                                            .hint_text("Search country, city, or IANA zone"),
+                        egui::Frame::new()
+                            .fill(CARD)
+                            .stroke(egui::Stroke::new(
+                                1.0_f32,
+                                if i == 0 {
+                                    ACCENT
+                                } else {
+                                    egui::Color32::from_rgb(43, 65, 78)
+                                },
+                            ))
+                            .corner_radius(egui::CornerRadius::same(10))
+                            .inner_margin(10)
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    let (badge, _) = ui.allocate_exact_size(
+                                        egui::vec2(26.0, 26.0),
+                                        egui::Sense::hover(),
                                     );
-                                    if !self.rows[i].popup_open {
-                                        search.request_focus();
-                                    }
-                                    self.rows[i].popup_open = true;
-                                    let query = self.rows[i].query.to_lowercase();
-                                    egui::ScrollArea::vertical()
-                                        .max_height(200.0)
-                                        .show(ui, |ui| {
-                                            for z in self
-                                                .zones
-                                                .iter()
-                                                .filter(|z| logic::matches(z, &query))
-                                            {
-                                                let offset =
-                                                    self.instant.with_timezone(&z.tz).format("%:z");
-                                                if ui
-                                                    .selectable_label(
-                                                        selected == z.tz.name(),
-                                                        format!("{} (UTC{})", z.label, offset),
-                                                    )
-                                                    .clicked()
-                                                {
-                                                    self.settings.zones[i] = z.tz.name().into();
-                                                    self.rows[i].query.clear();
-                                                    self.rows[i].popup_open = false;
-                                                    ui.memory_mut(|m| m.close_popup());
-                                                    break;
-                                                }
+                                    ui.painter().circle_filled(
+                                        badge.center(),
+                                        13.0,
+                                        if i == 0 {
+                                            egui::Color32::from_rgb(25, 110, 111)
+                                        } else {
+                                            egui::Color32::from_rgb(42, 76, 89)
+                                        },
+                                    );
+                                    ui.painter().text(
+                                        badge.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        logic::row_label(i),
+                                        egui::FontId::proportional(12.0),
+                                        egui::Color32::WHITE,
+                                    );
+                                    let selected = self.settings.zones[i].clone();
+                                    let popup = egui::ComboBox::from_id_salt(i)
+                                        .selected_text(&selected)
+                                        .width(
+                                            (ui.available_width()
+                                                - if i >= 2 {
+                                                    80.0
+                                                } else if i == 0 {
+                                                    62.0
+                                                } else {
+                                                    8.0
+                                                })
+                                            .clamp(120.0, 310.0),
+                                        )
+                                        .close_behavior(
+                                            egui::PopupCloseBehavior::CloseOnClickOutside,
+                                        )
+                                        .show_ui(ui, |ui| {
+                                            let search = ui.add(
+                                                egui::TextEdit::singleline(&mut self.rows[i].query)
+                                                    .hint_text(
+                                                        "Search country, city, or IANA zone",
+                                                    ),
+                                            );
+                                            if !self.rows[i].popup_open {
+                                                search.request_focus();
                                             }
+                                            self.rows[i].popup_open = true;
+                                            let query = self.rows[i].query.to_lowercase();
+                                            egui::ScrollArea::vertical().max_height(200.0).show(
+                                                ui,
+                                                |ui| {
+                                                    for z in self
+                                                        .zones
+                                                        .iter()
+                                                        .filter(|z| logic::matches(z, &query))
+                                                    {
+                                                        let offset = self
+                                                            .instant
+                                                            .with_timezone(&z.tz)
+                                                            .format("%:z");
+                                                        if ui
+                                                            .selectable_label(
+                                                                selected == z.tz.name(),
+                                                                format!(
+                                                                    "{} (UTC{})",
+                                                                    z.label, offset
+                                                                ),
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            self.settings.zones[i] =
+                                                                z.tz.name().into();
+                                                            self.rows[i].tz = z.tz;
+                                                            self.rows[i].query.clear();
+                                                            self.rows[i].popup_open = false;
+                                                            ui.memory_mut(|m| m.close_popup());
+                                                            break;
+                                                        }
+                                                    }
+                                                },
+                                            );
+                                        });
+                                    if popup.inner.is_none() {
+                                        self.rows[i].popup_open = false;
+                                    }
+                                    if selected != self.settings.zones[i] {
+                                        self.refresh_row(i);
+                                        save(&self.settings);
+                                    }
+                                    if i == 0 && ui.small_button("Now").clicked() {
+                                        self.instant = Utc::now();
+                                        self.reference = 0;
+                                        self.refresh();
+                                    }
+                                    if i >= 2
+                                        && ui
+                                            .small_button("Remove")
+                                            .on_hover_text("Remove zone")
+                                            .clicked()
+                                    {
+                                        remove = Some(i);
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    if i == 0 {
+                                        let date = ui.add_sized(
+                                            [95.0, 20.0],
+                                            egui::TextEdit::singleline(&mut self.rows[i].date)
+                                                .hint_text("YYYY-MM-DD")
+                                                .interactive(i == 0),
+                                        );
+                                        let time = ui.add_sized(
+                                            [55.0, 20.0],
+                                            egui::TextEdit::singleline(&mut self.rows[i].time)
+                                                .hint_text("HH:MM")
+                                                .interactive(i == 0),
+                                        );
+                                        if date.changed() || time.changed() {
+                                            self.rows[i].message.clear();
+                                        }
+                                        let enter_key = (date.has_focus()
+                                            || date.lost_focus()
+                                            || time.has_focus()
+                                            || time.lost_focus())
+                                            && ui
+                                                .input(|input| input.key_pressed(egui::Key::Enter));
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new("Enter")
+                                                        .color(BACKGROUND)
+                                                        .strong(),
+                                                )
+                                                .fill(ACCENT),
+                                            )
+                                            .clicked()
+                                            || enter_key
+                                        {
+                                            self.convert(i);
+                                        }
+                                    } else {
+                                        ui.label(
+                                            egui::RichText::new(&self.rows[i].time)
+                                                .monospace()
+                                                .size(27.0)
+                                                .strong()
+                                                .color(egui::Color32::WHITE),
+                                        );
+                                    }
+                                });
+                                let t = self.instant.with_timezone(&self.tz(i));
+                                if self.settings.analog {
+                                    ui.horizontal(|ui| {
+                                        let (rect, _) = ui.allocate_exact_size(
+                                            egui::vec2(42.0, 42.0),
+                                            egui::Sense::hover(),
+                                        );
+                                        let center = rect.center();
+                                        let painter = ui.painter();
+                                        painter.circle_filled(center, 20.0, BACKGROUND);
+                                        painter.circle_stroke(
+                                            center,
+                                            19.0,
+                                            egui::Stroke::new(1.5_f32, ACCENT),
+                                        );
+                                        let minute = t.minute() as f32;
+                                        let hour = (t.hour() % 12) as f32 + minute / 60.0;
+                                        for (fraction, length, width) in [
+                                            (hour / 12.0, 10.0, 2.5_f32),
+                                            (minute / 60.0, 15.0, 1.8_f32),
+                                        ] {
+                                            let angle = fraction * std::f32::consts::TAU;
+                                            let tip = center
+                                                + egui::vec2(angle.sin(), -angle.cos()) * length;
+                                            painter.line_segment(
+                                                [center, tip],
+                                                egui::Stroke::new(width, egui::Color32::WHITE),
+                                            );
+                                        }
+                                        painter.circle_filled(center, 2.0, ACCENT);
+                                        ui.label(
+                                            egui::RichText::new("Local time").small().color(MUTED),
+                                        );
+                                    });
+                                }
+                                let base = self.instant.with_timezone(&self.tz(self.reference));
+                                let diff = (t.date_naive() - base.date_naive()).num_days();
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{}  ·  {} UTC{}",
+                                            self.rows[i].date,
+                                            t.format("%Z"),
+                                            t.format("%:z"),
+                                        ))
+                                        .small()
+                                        .color(MUTED),
+                                    );
+                                    egui::Frame::new()
+                                        .fill(egui::Color32::from_rgb(31, 65, 72))
+                                        .corner_radius(egui::CornerRadius::same(6))
+                                        .inner_margin(egui::Margin::symmetric(6, 2))
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    logic::day_label(diff, self.reference, i)
+                                                        .trim(),
+                                                )
+                                                .small()
+                                                .color(ACCENT),
+                                            );
                                         });
                                 });
-                            if popup.inner.is_none() {
-                                self.rows[i].popup_open = false;
-                            }
-                            if selected != self.settings.zones[i] {
-                                self.refresh_row(i);
-                                save(&self.settings);
-                            }
-                            if i >= 2 && ui.small_button("×").on_hover_text("Remove zone").clicked()
-                            {
-                                remove = Some(i);
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            let date = ui.add_sized(
-                                [95.0, 20.0],
-                                egui::TextEdit::singleline(&mut self.rows[i].date)
-                                    .hint_text("YYYY-MM-DD")
-                                    .interactive(i == 0),
-                            );
-                            let time = ui.add_sized(
-                                [55.0, 20.0],
-                                egui::TextEdit::singleline(&mut self.rows[i].time)
-                                    .hint_text("HH:MM")
-                                    .interactive(i == 0),
-                            );
-                            if date.changed() || time.changed() {
-                                self.rows[i].message.clear();
-                            }
-                            if i == 0 {
-                                let enter_key = (date.has_focus()
-                                    || date.lost_focus()
-                                    || time.has_focus()
-                                    || time.lost_focus())
-                                    && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                                if ui.button("Enter").clicked() || enter_key {
-                                    self.convert(i);
+                                if !self.rows[i].message.is_empty() {
+                                    ui.label(&self.rows[i].message);
                                 }
-                                if ui.small_button("Now").clicked() {
-                                    self.instant = Utc::now();
-                                    self.reference = 0;
-                                    self.refresh();
-                                }
-                            }
-                        });
-                        let t = self.instant.with_timezone(&self.tz(i));
-                        let base = self.instant.with_timezone(&self.tz(self.reference));
-                        let diff = (t.date_naive() - base.date_naive()).num_days();
-                        ui.label(format!(
-                            "{} UTC{}{}",
-                            t.format("%Z"),
-                            t.format("%:z"),
-                            logic::day_label(diff, self.reference, i)
-                        ));
-                        if !self.rows[i].message.is_empty() {
-                            ui.label(&self.rows[i].message);
-                        }
+                            });
+                        ui.add_space(4.0);
                     }
                     if let Some(i) = remove {
                         self.rows.remove(i);
@@ -255,9 +441,12 @@ impl eframe::App for App {
                     }
                     ui.separator();
                     if ui
-                        .add_enabled(self.rows.len() < 6, egui::Button::new("+ Add zone"))
-                        .clicked()
+                        .checkbox(&mut self.settings.analog, "Analog clocks")
+                        .changed()
                     {
+                        save(&self.settings);
+                    }
+                    if ui.button("+ Add zone").clicked() {
                         self.settings.zones.push("Etc/UTC".into());
                         self.rows.push(Row::default());
                         self.refresh_row(self.rows.len() - 1);
@@ -268,12 +457,21 @@ impl eframe::App for App {
     }
 }
 fn main() -> eframe::Result {
+    let icon = image::load_from_memory(include_bytes!("../assets/icon.png"))
+        .expect("embedded icon")
+        .into_rgba8();
+    let (width, height) = icon.dimensions();
     eframe::run_native(
         "Time Convert",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([420.0, 290.0])
-                .with_min_inner_size([350.0, 240.0]),
+                .with_min_inner_size([350.0, 240.0])
+                .with_icon(egui::IconData {
+                    rgba: icon.into_raw(),
+                    width,
+                    height,
+                }),
             ..Default::default()
         },
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
@@ -301,11 +499,12 @@ mod tests {
         let mut s = Settings {
             zones: vec![],
             on_top: false,
+            analog: false,
         };
         s.normalize();
         assert_eq!(s.zones.len(), 2);
         s.zones = vec!["UTC".into(); 9];
         s.normalize();
-        assert_eq!(s.zones.len(), 6);
+        assert_eq!(s.zones.len(), 9);
     }
 }

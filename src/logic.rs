@@ -109,6 +109,17 @@ pub fn matches(zone: &Zone, query: &str) -> bool {
         .split_whitespace()
         .all(|word| zone.search.contains(word))
 }
+pub fn row_label(mut row: usize) -> String {
+    let mut result = String::new();
+    loop {
+        result.insert(0, (b'A' + (row % 26) as u8) as char);
+        if row < 26 {
+            break;
+        }
+        row = row / 26 - 1;
+    }
+    result
+}
 pub fn day_label(diff: i64, reference: usize, row: usize) -> String {
     if row == reference {
         "  (reference)".into()
@@ -116,7 +127,7 @@ pub fn day_label(diff: i64, reference: usize, row: usize) -> String {
         format!(
             "  ({diff:+} day{} vs {})",
             if diff.abs() == 1 { "" } else { "s" },
-            (b'A' + reference as u8) as char
+            row_label(reference)
         )
     }
 }
@@ -217,5 +228,8 @@ mod tests {
         assert_eq!(day_label(-1, 1, 0), "  (-1 day vs B)");
         assert_eq!(day_label(0, 1, 0), "  (+0 days vs B)");
         assert_eq!(day_label(0, 0, 0), "  (reference)");
+        assert_eq!(row_label(25), "Z");
+        assert_eq!(row_label(26), "AA");
+        assert_eq!(row_label(702), "AAA");
     }
 }
